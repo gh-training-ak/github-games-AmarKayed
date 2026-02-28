@@ -1,9 +1,6 @@
 name: Setup Sprint Projects and Issue
 
 on:
-  push:
-    branches: [ "copilot/propose-enhancement-to-repo" ]
-    paths: [ ".github/workflows/setup-sprints.yml" ]
   workflow_dispatch:
 
 permissions:
