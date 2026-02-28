@@ -10,6 +10,11 @@ permissions:
   issues: write
   contents: read
   repository-projects: write
+  # Note: creating GitHub Projects v2 at the organisation level also requires
+  # the 'project' OAuth scope. If the GITHUB_TOKEN does not carry that scope,
+  # add a PAT (with 'project' scope) as a repository secret named PROJECT_TOKEN
+  # and replace ${{ secrets.GITHUB_TOKEN }} with ${{ secrets.PROJECT_TOKEN }}
+  # in the steps below.
 
 jobs:
   setup:
@@ -18,14 +23,25 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: gh-training-ak/github-games-AmarKayed
       OWNER: gh-training-ak
+      ISSUE_TITLE: "Enhancement: Add persistent high score tracking"
     steps:
-      - name: Create High Score Enhancement Issue
+      - name: Create High Score Enhancement Issue (idempotent)
         id: create_issue
         run: |
-          ISSUE_URL=$(gh issue create \
-            --repo "$REPO" \
-            --title "Enhancement: Add persistent high score tracking" \
-            --body "## Summary
+          # Check if the issue already exists to avoid duplicates
+          EXISTING=$(gh issue list --repo "$REPO" --state open \
+            --search "$ISSUE_TITLE" --json number,title \
+            --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+
+          if [ -n "$EXISTING" ]; then
+            echo "Issue already exists as #$EXISTING"
+            ISSUE_NUMBER=$EXISTING
+            ISSUE_URL="https://github.com/$REPO/issues/$EXISTING"
+          else
+            ISSUE_URL=$(gh issue create \
+              --repo "$REPO" \
+              --title "$ISSUE_TITLE" \
+              --body "## Summary
 
           This issue tracks the implementation of a persistent high score feature for the JavaScript Tetris game.
 
@@ -40,71 +56,110 @@ jobs:
           - Display a **best** score next to the current score in the game menu (styled in gold/goldenrod colour)
           - On game start, load the saved high score from \`localStorage\`
           - When a game ends (\`lose()\`), compare the current score to the high score; if the current score is higher, save it to \`localStorage\` and refresh the display
-          - Follow the existing invalidation/rendering pattern: add \`invalidateHighScore()\` and \`drawHighScore()\` functions
+          - Follow the existing invalidation/rendering pattern by adding \`invalidateHighScore()\` and \`drawHighScore()\` functions
 
           ## Acceptance Criteria
 
           - [ ] A **best** label with a zero-padded 5-digit score is visible in the game menu
           - [ ] The high score persists after a full page reload
           - [ ] The high score updates automatically when the player sets a new record
-          - [ ] The display uses the same zero-padded 5-digit format as the current score")
-          echo "ISSUE_URL=$ISSUE_URL" >> $GITHUB_OUTPUT
-          ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
-          echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-          echo "Created issue #$ISSUE_NUMBER at $ISSUE_URL"
+          - [ ] The display uses the same zero-padded 5-digit format as the current score
+
+          ## Implementation
+
+          See PR #10 for the proposed implementation.")
+            ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
+            echo "Created issue #$ISSUE_NUMBER at $ISSUE_URL"
+          fi
+
+          echo "ISSUE_URL=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+          echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Get organisation node ID
         id: org
         run: |
-          ORG_ID=$(gh api graphql -f query='query { organization(login: "'"$OWNER"'") { id } }' --jq '.data.organization.id')
-          echo "ORG_ID=$ORG_ID" >> $GITHUB_OUTPUT
+          ORG_ID=$(gh api graphql \
+            -f query='query($login:String!){organization(login:$login){id}}' \
+            -f login="$OWNER" \
+            --jq '.data.organization.id')
+          echo "ORG_ID=$ORG_ID" >> "$GITHUB_OUTPUT"
+          echo "Org ID: $ORG_ID"
 
-      - name: Create Sprint 1 Project
+      - name: Create Sprint 1 Project (idempotent)
         id: sprint1
         run: |
-          PROJECT=$(gh api graphql -f query='mutation {
-            createProjectV2(input: {ownerId: "'"${{ steps.org.outputs.ORG_ID }}"'", title: "Sprint 1"}) {
-              projectV2 { id number }
-            }
-          }' --jq '.data.createProjectV2.projectV2')
-          PROJECT_ID=$(echo "$PROJECT" | jq -r '.id')
-          PROJECT_NUMBER=$(echo "$PROJECT" | jq -r '.number')
-          echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "PROJECT_NUMBER=$PROJECT_NUMBER" >> $GITHUB_OUTPUT
-          echo "Created Sprint 1 project #$PROJECT_NUMBER"
+          # Check for existing Sprint 1 project
+          EXISTING_ID=$(gh api graphql \
+            -f query='query($login:String!){organization(login:$login){projectsV2(first:20){nodes{id number title}}}}' \
+            -f login="$OWNER" \
+            --jq '.data.organization.projectsV2.nodes[] | select(.title=="Sprint 1") | .id' | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            EXISTING_NUM=$(gh api graphql \
+              -f query='query($login:String!){organization(login:$login){projectsV2(first:20){nodes{id number title}}}}' \
+              -f login="$OWNER" \
+              --jq '.data.organization.projectsV2.nodes[] | select(.title=="Sprint 1") | .number' | head -1)
+            echo "Sprint 1 project already exists (#$EXISTING_NUM)"
+            echo "PROJECT_ID=$EXISTING_ID" >> "$GITHUB_OUTPUT"
+            echo "PROJECT_NUMBER=$EXISTING_NUM" >> "$GITHUB_OUTPUT"
+          else
+            RESULT=$(gh api graphql \
+              -f query='mutation($ownerId:ID!,$title:String!){createProjectV2(input:{ownerId:$ownerId,title:$title}){projectV2{id number}}}' \
+              -f ownerId="${{ steps.org.outputs.ORG_ID }}" \
+              -f title="Sprint 1" \
+              --jq '.data.createProjectV2.projectV2')
+            PROJECT_ID=$(echo "$RESULT" | jq -r '.id')
+            PROJECT_NUMBER=$(echo "$RESULT" | jq -r '.number')
+            echo "Created Sprint 1 project #$PROJECT_NUMBER (id: $PROJECT_ID)"
+            echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+            echo "PROJECT_NUMBER=$PROJECT_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Add new issue to Sprint 1
         run: |
-          ISSUE_ID=$(gh api repos/$REPO/issues/${{ steps.create_issue.outputs.ISSUE_NUMBER }} --jq '.node_id')
-          gh api graphql -f query='mutation {
-            addProjectV2ItemById(input: {projectId: "'"${{ steps.sprint1.outputs.PROJECT_ID }}"'", contentId: "'"$ISSUE_ID"'"}) {
-              item { id }
-            }
-          }'
+          ISSUE_NODE_ID=$(gh api "repos/$REPO/issues/${{ steps.create_issue.outputs.ISSUE_NUMBER }}" --jq '.node_id')
+          gh api graphql \
+            -f query='mutation($projectId:ID!,$contentId:ID!){addProjectV2ItemById(input:{projectId:$projectId,contentId:$contentId}){item{id}}}' \
+            -f projectId="${{ steps.sprint1.outputs.PROJECT_ID }}" \
+            -f contentId="$ISSUE_NODE_ID"
           echo "Added issue #${{ steps.create_issue.outputs.ISSUE_NUMBER }} to Sprint 1"
 
-      - name: Create Sprint 0 Project
+      - name: Create Sprint 0 Project (idempotent)
         id: sprint0
         run: |
-          PROJECT=$(gh api graphql -f query='mutation {
-            createProjectV2(input: {ownerId: "'"${{ steps.org.outputs.ORG_ID }}"'", title: "Sprint 0"}) {
-              projectV2 { id number }
-            }
-          }' --jq '.data.createProjectV2.projectV2')
-          PROJECT_ID=$(echo "$PROJECT" | jq -r '.id')
-          PROJECT_NUMBER=$(echo "$PROJECT" | jq -r '.number')
-          echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "PROJECT_NUMBER=$PROJECT_NUMBER" >> $GITHUB_OUTPUT
-          echo "Created Sprint 0 project #$PROJECT_NUMBER"
+          # Check for existing Sprint 0 project
+          EXISTING_ID=$(gh api graphql \
+            -f query='query($login:String!){organization(login:$login){projectsV2(first:20){nodes{id number title}}}}' \
+            -f login="$OWNER" \
+            --jq '.data.organization.projectsV2.nodes[] | select(.title=="Sprint 0") | .id' | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            EXISTING_NUM=$(gh api graphql \
+              -f query='query($login:String!){organization(login:$login){projectsV2(first:20){nodes{id number title}}}}' \
+              -f login="$OWNER" \
+              --jq '.data.organization.projectsV2.nodes[] | select(.title=="Sprint 0") | .number' | head -1)
+            echo "Sprint 0 project already exists (#$EXISTING_NUM)"
+            echo "PROJECT_ID=$EXISTING_ID" >> "$GITHUB_OUTPUT"
+          else
+            RESULT=$(gh api graphql \
+              -f query='mutation($ownerId:ID!,$title:String!){createProjectV2(input:{ownerId:$ownerId,title:$title}){projectV2{id number}}}' \
+              -f ownerId="${{ steps.org.outputs.ORG_ID }}" \
+              -f title="Sprint 0" \
+              --jq '.data.createProjectV2.projectV2')
+            PROJECT_ID=$(echo "$RESULT" | jq -r '.id')
+            PROJECT_NUMBER=$(echo "$RESULT" | jq -r '.number')
+            echo "Created Sprint 0 project #$PROJECT_NUMBER (id: $PROJECT_ID)"
+            echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Add existing issues to Sprint 0
         run: |
           for ISSUE_NUM in 1 2; do
-            ISSUE_ID=$(gh api repos/$REPO/issues/$ISSUE_NUM --jq '.node_id')
-            gh api graphql -f query='mutation {
-              addProjectV2ItemById(input: {projectId: "'"${{ steps.sprint0.outputs.PROJECT_ID }}"'", contentId: "'"$ISSUE_ID"'"}) {
-                item { id }
-              }
-            }'
+            ISSUE_NODE_ID=$(gh api "repos/$REPO/issues/$ISSUE_NUM" --jq '.node_id')
+            gh api graphql \
+              -f query='mutation($projectId:ID!,$contentId:ID!){addProjectV2ItemById(input:{projectId:$projectId,contentId:$contentId}){item{id}}}' \
+              -f projectId="${{ steps.sprint0.outputs.PROJECT_ID }}" \
+              -f contentId="$ISSUE_NODE_ID"
             echo "Added issue #$ISSUE_NUM to Sprint 0"
           done
+
