@@ -11,8 +11,9 @@
     #menu p   { margin: 0.5em 0; text-align: center; }
     #menu p a { text-decoration: none; color: black; }
     #upcoming { display: block; margin: 0 auto; background-color: #E0E0E0; }
-    #score    { color: blue; font-weight: bold; vertical-align: middle; }
-    #rows     { color: blue; font-weight: bold; vertical-align: middle; }
+    #score     { color: blue; font-weight: bold; vertical-align: middle; }
+    #rows      { color: blue; font-weight: bold; vertical-align: middle; }
+    #highscore { color: goldenrod; font-weight: bold; vertical-align: middle; }
     #stats    { position: absolute; bottom: 0em; right: 1em; }
     @media screen and (min-width:   0px) and (min-height:   0px)  { #tetris { font-size: 0.75em; width: 250px; } #menu { width: 100px; height: 200px; } #upcoming { width:  50px; height:  50px; } #canvas { width: 100px; height: 200px; } } /* 10px chunks */
     @media screen and (min-width: 400px) and (min-height: 400px)  { #tetris { font-size: 1.00em; width: 350px; } #menu { width: 150px; height: 300px; } #upcoming { width:  75px; height:  75px; } #canvas { width: 150px; height: 300px; } } /* 15px chunks */
@@ -32,6 +33,7 @@
       <p><canvas id="upcoming"></canvas></p>
       <p>score <span id="score">00000</span></p>
       <p>rows <span id="rows">0</span></p>
+      <p>best <span id="highscore">00000</span></p>
     </div>
     <canvas id="canvas">
       Sorry, this example cannot be run because your browser does not support the &lt;canvas&gt; element
@@ -95,7 +97,8 @@
         score,         // the current score
         vscore,        // the currently displayed score (it catches up to score in small chunks - like a spinning slot machine)
         rows,          // number of completed rows in the current game
-        step;          // how long before current piece drops by 1 row
+        step,          // how long before current piece drops by 1 row
+        highscore;     // the all-time high score (persisted in localStorage)
 
     //-------------------------------------------------------------------------
     // tetris pieces
@@ -173,6 +176,7 @@
 
     function run() {
 
+      highscore = parseInt(localStorage.getItem('tetris_highscore'), 10) || 0;
       showStats(); // initialize FPS counter
       addEvents(); // attach keydown and resize events
 
@@ -188,6 +192,7 @@
 
       resize(); // setup all our sizing information
       reset();  // reset the per-game variables
+      invalidateHighScore(); // render initial high score
       frame();  // start the first frame
 
     }
@@ -245,7 +250,14 @@
     function play() { hide('start'); reset();      paused = false;  playing = true;  }
     function pause() {show('start'); paused = true; playing = false;}
     function restart() {hide('start'); paused = false; playing = true;}
-    function lose() { show('start'); setVisualScore(); playing = false; }
+    function lose() {
+      if (score > highscore) {
+        highscore = score;
+        localStorage.setItem('tetris_highscore', highscore);
+        invalidateHighScore();
+      }
+      show('start'); setVisualScore(); playing = false;
+    }
 
     function setVisualScore(n)      { vscore = n || score; invalidateScore(); }
     function setScore(n)            { score = n; setVisualScore(n);  }
@@ -260,7 +272,6 @@
     function clearActions()         { actions = []; }
     function setCurrentPiece(piece) { current = piece || randomPiece(); invalidate();     }
     function setNextPiece(piece)    { next    = piece || randomPiece(); invalidateNext(); }
-
     function reset() {
       dt = 0;
       clearActions();
@@ -377,6 +388,7 @@
     function invalidateNext()     { invalid.next   = true; }
     function invalidateScore()    { invalid.score  = true; }
     function invalidateRows()     { invalid.rows   = true; }
+    function invalidateHighScore(){ invalid.highscore = true; }
 
     function draw() {
       ctx.save();
@@ -386,6 +398,7 @@
       drawNext();
       drawScore();
       drawRows();
+      drawHighScore();
       ctx.restore();
     }
 
@@ -431,6 +444,13 @@
       if (invalid.rows) {
         html('rows', rows);
         invalid.rows = false;
+      }
+    }
+
+    function drawHighScore() {
+      if (invalid.highscore) {
+        html('highscore', ("00000" + Math.floor(highscore)).slice(-5));
+        invalid.highscore = false;
       }
     }
 
